@@ -54,54 +54,84 @@ class BuildResult:
         return sum(p.stat().st_size for p in self.page_dir.rglob("*") if p.is_file())
 
 
+@dataclass
+class NavContext:
+    """Sidebar + previous/next links for pages published as part of a folder."""
+    folder_title: str
+    home_href: str
+    sidebar_html: str
+    pager_html: str
+
+
 def build(rendered: Rendered, note: Note, opts: PageOptions, site: Path, index: VaultIndex | None = None) -> BuildResult:
+    """A single published note: <site>/<id>/index.html."""
+    root = site / opts.page_id
+    if root.exists():
+        shutil.rmtree(root)
+    css_name = build_css(rendered, site)
+    return build_page(rendered, note, opts, site, css_name, index)
+
+
+def build_css(rendered: Rendered, site: Path) -> str:
+    """Obsidian's CSS + theme + fonts + postcard.css as one content-hashed file in <site>/_s/. Returns its name."""
     shared = site / "_s"
-    page_dir = site / opts.page_id
-    if page_dir.exists():
-        shutil.rmtree(page_dir)
-    (page_dir / "a").mkdir(parents=True)
     shared.mkdir(parents=True, exist_ok=True)
+    css = rendered.css
+    for asset in sorted(rendered.assets.iterdir()) if rendered.assets.is_dir() else []:
+        token = ASSET_TOKEN + asset.name
+        if token in css:
+            data = asset.read_bytes()
+            name = _hashed_name(data, asset.suffix.lstrip(".").lower())
+            (shared / name).write_bytes(data)
+            css = css.replace(token, name)  # the stylesheet lives in /_s/ too, so a bare name works
+    css = css + "\n\n" + _font_css(shared) + "\n\n" + (STATIC / "postcard.css").read_text()
+    css_name = _hashed_name(css.encode(), "css")
+    (shared / css_name).write_text(css, encoding="utf-8")
+    return css_name
+
+
+def build_page(rendered: Rendered, note: Note, opts: PageOptions, site: Path, css_name: str,
+               index: VaultIndex | None = None, *, page_path: str = "", nav: NavContext | None = None) -> BuildResult:
+    """One page at <site>/<id>/<page_path>/index.html; its images go to <site>/<id>/a/ (shared within a folder)."""
+    root = site / opts.page_id
+    page_dir = root / page_path if page_path else root
+    (root / "a").mkdir(parents=True, exist_ok=True)
+    page_dir.mkdir(parents=True, exist_ok=True)
 
     meta = rendered.meta
-    result = BuildResult(site=site, page_dir=page_dir, css_name="", warnings=list(meta.get("warnings", [])))
-    css, content = rendered.css, rendered.content
+    result = BuildResult(site=site, page_dir=root, css_name=css_name, warnings=list(meta.get("warnings", [])))
+    content = rendered.content
 
     for asset in sorted(rendered.assets.iterdir()) if rendered.assets.is_dir() else []:
         token = ASSET_TOKEN + asset.name
-        in_css, in_content = token in css, token in content
-        if not (in_css or in_content):
+        if token not in content:
             continue
         data, ext = asset.read_bytes(), asset.suffix.lstrip(".").lower()
-        if in_content and ext in RASTER:
+        if ext in RASTER:
             data, ext, gps = process_image(data, ext)
             if gps:
                 result.gps_stripped.append(asset.name)
         name = _hashed_name(data, ext)
-        if in_css:
-            (shared / name).write_bytes(data)
-            css = css.replace(token, name)  # the stylesheet lives in /_s/ too, so a bare name works
-        if in_content:
-            (page_dir / "a" / name).write_bytes(data)
-            content = content.replace(token, f"/{opts.page_id}/a/{name}")
-
-    css = css + "\n\n" + _font_css(shared) + "\n\n" + (STATIC / "postcard.css").read_text()
-    result.css_name = _hashed_name(css.encode(), "css")
-    (shared / result.css_name).write_text(css, encoding="utf-8")
+        (root / "a" / name).write_bytes(data)
+        content = content.replace(token, f"/{opts.page_id}/a/{name}")
 
     cover_src = None
     if cover := note.frontmatter.get("cover"):
-        cover_src = _cover(str(cover), note, opts, page_dir, index or VaultIndex(note.vault), result)
+        cover_src = _cover(str(cover), note, opts, root, index or VaultIndex(note.vault), result)
 
-    # Most notes start with `# <title>`; showing Obsidian's inline title too would print it twice.
+    # When a note opens with its own `# Heading`, that heading is the page title: Obsidian's inline title
+    # on top of it reads as a duplicate. Keep the inline title only when it's an explicit frontmatter
+    # `title:` that differs from the heading (e.g. title "Vietnam Micro Blog", first heading "# Day 1").
     first_h1 = re.match(r"\s*(?:<div>\s*)?<h1\b[^>]*>(.*?)</h1>", content, re.S)
-    title_in_content = bool(first_h1) and _text(first_h1.group(1)).lower() == opts.title.strip().lower()
+    same_text = bool(first_h1) and _text(first_h1.group(1)).lower() == opts.title.strip().lower()
+    title_in_content = bool(first_h1) and (same_text or not note.frontmatter.get("title"))
     body_text = content[first_h1.end():] if title_in_content else content
 
     page = render_page(
         content=content,
         title=opts.title,
         show_inline_title=not title_in_content,
-        css_href=f"/_s/{result.css_name}",
+        css_href=f"/_s/{css_name}",
         body_class=meta.get("body_class", f"theme-{opts.mode}"),
         body_style=_clean_body_style(meta.get("body_style", "")),
         icon=str(note.frontmatter.get("icon") or "") or None,
@@ -109,6 +139,7 @@ def build(rendered: Rendered, note: Note, opts: PageOptions, site: Path, index: 
         description=str(note.frontmatter.get("description") or "") or _summary(body_text),
         url=opts.url,
         updated=opts.updated,
+        nav=nav,
     )
     (page_dir / "index.html").write_text(page, encoding="utf-8")
     return result
@@ -190,12 +221,24 @@ def _clean_body_style(style: str) -> str:
 
 
 PAGE_JS = """
+(function () {
+  var sb = document.querySelector(".postcard-sidebar"), active = sb && sb.querySelector(".is-active");
+  if (active) sb.scrollTop = active.offsetTop - sb.clientHeight / 2;  // only the sidebar scrolls, not the page
+})();
 document.addEventListener("click", function (e) {
   var title = e.target.closest(".callout.is-collapsible > .callout-title");
   if (title) {
     var c = title.parentElement, body = c.querySelector(":scope > .callout-content");
     c.classList.toggle("is-collapsed");
     if (body) body.style.display = c.classList.contains("is-collapsed") ? "none" : "";
+  }
+  var folder = e.target.closest(".postcard-sidebar .nav-folder-title.mod-collapsible");
+  if (folder) folder.parentElement.classList.toggle("is-collapsed");
+  var menu = e.target.closest(".postcard-menu");
+  if (menu || e.target.closest(".postcard-scrim")) {
+    var open = document.body.classList.toggle("postcard-nav-open");
+    var m = document.querySelector(".postcard-menu");
+    if (m) m.setAttribute("aria-expanded", String(open));
   }
   var btn = e.target.closest(".copy-code-button");
   if (btn) {
@@ -209,7 +252,7 @@ document.addEventListener("click", function (e) {
 
 
 def render_page(*, content: str, title: str, show_inline_title: bool, css_href: str, body_class: str, body_style: str, icon: str | None,
-                cover_src: str | None, description: str, url: str, updated: datetime) -> str:
+                cover_src: str | None, description: str, url: str, updated: datetime, nav: NavContext | None = None) -> str:
     e = html.escape
     base = url.split("/", 3)
     origin = "/".join(base[:3]) if len(base) >= 3 else ""
@@ -223,7 +266,7 @@ def render_page(*, content: str, title: str, show_inline_title: bool, css_href: 
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
         '<meta name="robots" content="noindex, nofollow, noarchive">',
         '<meta name="referrer" content="no-referrer">',
-        f"<title>{e(title)}</title>",
+        f"<title>{e(title + (' · ' + nav.folder_title if nav else ''))}</title>",
         f'<meta name="description" content="{e(description)}">',
         f'<meta property="og:title" content="{e(title)}">',
         f'<meta property="og:description" content="{e(description)}">',
@@ -247,7 +290,18 @@ def render_page(*, content: str, title: str, show_inline_title: bool, css_href: 
     else:
         content = content.replace("</h1>", "</h1>" + updated_html, 1)  # right under the note's own title
 
-    # Same nesting as Obsidian's reading view, so theme selectors like
+    menu = sidebar = pager = ""
+    if nav:
+        body_class += " postcard-collection"
+        menu = (f'<button class="postcard-menu" type="button" aria-controls="postcard-sidebar" aria-expanded="false">'
+                f'<span aria-hidden="true">☰</span> {e(nav.folder_title)}</button>')
+        sidebar = (f'<div class="workspace-split mod-left-split postcard-sidebar" id="postcard-sidebar">'
+                   f'<a class="postcard-sidebar-title" href="{e(nav.home_href)}">{e(nav.folder_title)}</a>'
+                   f'<div class="nav-files-container">{nav.sidebar_html}</div></div>'
+                   f'<div class="postcard-scrim" aria-hidden="true"></div>')
+        pager = nav.pager_html
+
+    # Same nesting as Obsidian's reading view (and file explorer), so theme and snippet selectors like
     # `.workspace-leaf-content[data-type="markdown"] .markdown-preview-view h1` still match.
     return f"""<!doctype html>
 <html lang="en">
@@ -255,12 +309,14 @@ def render_page(*, content: str, title: str, show_inline_title: bool, css_href: 
 {chr(10).join(head)}
 </head>
 <body class="{e(body_class)} postcard" style="{e(body_style)}">
-<div class="app-container"><div class="workspace"><div class="workspace-split mod-root"><div class="workspace-leaf mod-active">
+{menu}
+<div class="app-container"><div class="workspace">{sidebar}<div class="workspace-split mod-root"><div class="workspace-leaf mod-active">
 <div class="workspace-leaf-content" data-type="markdown" data-mode="preview"><div class="view-content"><div class="markdown-reading-view">
 <div class="markdown-preview-view markdown-rendered node-insert-event is-readable-line-width allow-fold-headings show-indentation-guide">
 <div class="markdown-preview-sizer markdown-preview-section">
 {chr(10).join(top)}
 {content}
+{pager}
 </div>
 </div>
 </div></div></div>

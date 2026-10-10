@@ -61,8 +61,11 @@ def render_options(cfg: Config, note: Note, theme: str | None = None, mode: str 
 
 
 def make_site(cfg: Config, note: Note, page_id: str, ropts: RenderOptions, site: Path,
-              renderer: Renderer | None = None, index: VaultIndex | None = None) -> BuildResult:
-    rendered = (renderer or render_with_obsidian)(RenderRequest(cfg.vault, note.rel, ropts.theme_css, ropts.snippets, ropts.mode))
+              renderer: Renderer | None = None, index: VaultIndex | None = None,
+              link_map: dict[str, str] | None = None) -> BuildResult:
+    rendered = (renderer or render_with_obsidian)(
+        RenderRequest(cfg.vault, note.rel, ropts.theme_css, ropts.snippets, ropts.mode, link_map=link_map or None)
+    )
     opts = PageOptions(
         page_id=page_id,
         title=note.title,

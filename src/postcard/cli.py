@@ -18,7 +18,8 @@ from rich.panel import Panel
 from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 
-from . import __version__
+from . import __version__, core
+from . import folders as fold
 from .build import BuildResult
 from .config import Config, PostcardError, find_vault, load_config, obsidian_appearance, write_config
 from .core import (
@@ -62,7 +63,7 @@ app.add_typer(server_app, name="server")
 console = Console()
 err = Console(stderr=True)
 
-NoteArg = Annotated[str, typer.Argument(help="Path to the note, or part of its name.")]
+NoteArg = Annotated[str, typer.Argument(help="Path to a note or folder, or part of a note's name.")]
 ThemeOpt = Annotated[Optional[str], typer.Option("--theme", "-t", help='Obsidian theme to publish with, e.g. "Dark Moss".')]
 ModeOpt = Annotated[Optional[str], typer.Option("--mode", "-m", help="dark | light")]
 YesOpt = Annotated[bool, typer.Option("--yes", "-y", help="Don't ask for confirmation.")]
@@ -83,24 +84,39 @@ def main() -> None:
 # --- helpers ----------------------------------------------------------------
 
 def _resolve_note(query: str) -> tuple[Config, Path]:
-    p = Path(query).expanduser()
+    cfg, path = _resolve_target(query)
+    if path.is_dir():
+        raise PostcardError(f"{path.name} is a folder; this command works on single notes.")
+    return cfg, path
+
+
+def _resolve_target(query: str) -> tuple[Config, Path]:
+    """A note or a folder: a path (absolute or relative), or part of a note's / exact folder's name."""
+    p = Path(query.rstrip("/")).expanduser()
     if p.exists() or icloud_placeholder(p.absolute()).exists():
         path = p.absolute()
-        vault = find_vault(path.parent)
+        vault = find_vault(path if path.is_dir() else path.parent)
         if vault not in path.parents:
-            raise PostcardError(f"{path} isn't inside the vault {vault}.")
+            raise PostcardError(f"{path} isn't inside the vault {vault}." if path != vault else "Can't publish the whole vault.")
         return load_config(vault), path
 
     vault = find_vault(Path.cwd())
-    matches = find_notes(query, vault)
+    rel = vault / query.rstrip("/")
+    if rel.is_dir() and rel != vault:
+        return load_config(vault), rel
+    name = Path(query.rstrip("/")).name.lower()
+    dirs = sorted(d for d in vault.rglob("*") if d.is_dir() and d.name.lower() == name and not any(
+        part.startswith(".") for part in d.relative_to(vault).parts))
+    matches = dirs + find_notes(query, vault)
     if not matches:
-        raise PostcardError(f'No note matching "{query}" in {vault.name}.')
+        raise PostcardError(f'No note or folder matching "{query}" in {vault.name}.')
     if len(matches) == 1:
         return load_config(vault), matches[0]
     shown = matches[:15]
     for i, m in enumerate(shown, 1):
-        console.print(f"  [cyan]{i:>2}[/cyan]  {m.relative_to(vault)}")
-    pick = IntPrompt.ask("Which note?", choices=[str(i) for i in range(1, len(shown) + 1)], show_choices=False)
+        icon = "📁 " if m.is_dir() else ""
+        console.print(f"  [cyan]{i:>2}[/cyan]  {icon}{m.relative_to(vault)}")
+    pick = IntPrompt.ask("Which one?", choices=[str(i) for i in range(1, len(shown) + 1)], show_choices=False)
     return load_config(vault), shown[pick - 1]
 
 
@@ -205,8 +221,11 @@ def publish(
     restore: Annotated[bool, typer.Option("--restore", help="Re-use the old link of an unpublished note.")] = False,
     open_: Annotated[bool, typer.Option("--open", "-o", help="Open the page in the browser afterwards.")] = False,
 ):
-    """Publish a note, or update it if it's already live."""
-    cfg, path = _resolve_note(note)
+    """Publish a note or a whole folder, or update it if it's already live."""
+    cfg, path = _resolve_target(note)
+    if path.is_dir():
+        _publish_folder(cfg, path, theme=theme, mode=mode, yes=yes, force=force, restore=restore, open_=open_)
+        return
     n = read_note(path, cfg.vault)
     index = VaultIndex(cfg.vault)
     console.print(f"[bold]{n.title}[/bold]  [dim]{n.rel}[/dim]")
@@ -226,7 +245,7 @@ def publish(
 
     site = fresh_site_dir("site")
     with console.status(f"Rendering in Obsidian ({ropts.theme}, {ropts.mode})…"):
-        result = make_site(cfg, n, page_id, ropts, site, index=index)
+        result = make_site(cfg, n, page_id, ropts, site, index=index, link_map=fold.folder_link_map(registry))
     _show_build(result)
     with console.status(f"Uploading to {remote.host}…"):
         remote.publish_page(site, page_id)
@@ -245,6 +264,111 @@ def publish(
         webbrowser.open(entry["url"])
 
 
+def _plan_folder(cfg: Config, folder: Path, index: VaultIndex) -> fold.FolderPlan:
+    console.print(f"[bold]📁 {folder.name}[/bold]  [dim]{folder.relative_to(cfg.vault)}[/dim]")
+    with console.status("Checking notes…"):
+        fplan = fold.plan(cfg, folder, index)
+    console.print(f"{len(fplan.pages)} notes · home page: [bold]{fplan.home.rel}[/bold]")
+    for rel, errs in fplan.skipped:
+        console.print(f"[red]✗[/red] Skipping {rel}: {errs[0]}")
+    for rel, w in fplan.warnings:
+        console.print(f"[yellow]⚠[/yellow] {rel}: {w}")
+    for i in fplan.info:
+        console.print(f"[blue]ℹ[/blue] {i}")
+    return fplan
+
+
+def _render_folder(cfg: Config, fplan: fold.FolderPlan, page_id: str, ropts, site: Path, index: VaultIndex):
+    with console.status("Rendering in Obsidian…") as st:
+        def progress(done: int, total: int, rel: str) -> None:
+            st.update(f"Rendering in Obsidian ({ropts.theme}, {ropts.mode}) {done}/{total}  [dim]{rel}[/dim]")
+        rendered, css_render = fold.render_all(cfg, fplan, page_id, ropts, lambda req: core.render_with_obsidian(req), progress)
+    results = fold.build_folder(cfg, fplan, page_id, rendered, css_render, site, ropts.mode, index)
+    warnings = list(dict.fromkeys(w for r in results for w in r.warnings))
+    for w in warnings:
+        console.print(f"[yellow]⚠[/yellow] {w}")
+    gps = sum(len(r.gps_stripped) for r in results)
+    if gps:
+        console.print(f"[blue]ℹ[/blue] Removed GPS location from {gps} photo(s).")
+
+
+def _publish_folder(cfg: Config, folder: Path, *, theme, mode, yes: bool, force: bool, restore: bool, open_: bool,
+                    rotate_from: str | None = None) -> None:
+    index = VaultIndex(cfg.vault)
+    folder_rel = folder.relative_to(cfg.vault).as_posix()
+    fplan = _plan_folder(cfg, folder, index)
+    if (fplan.warnings or fplan.skipped) and not yes and not Confirm.ask("Publish anyway?", default=False):
+        raise typer.Exit(1)
+
+    ropts = render_options(cfg, fplan.home.note, theme, mode)
+    content_hash = fplan.content_hash(ropts)
+    remote = Remote.from_config(cfg)
+    registry = _registry(remote)
+    if rotate_from:
+        page_id, verb = new_id(), "New link for"
+    else:
+        page_id, verb = _choose_folder_id(cfg, folder_rel, registry, restore=restore, force=force, yes=yes,
+                                          content_hash=content_hash)
+
+    site = fresh_site_dir("site")
+    _render_folder(cfg, fplan, page_id, ropts, site, index)
+    with console.status(f"Uploading {len(fplan.pages)} pages to {remote.host}…"):
+        remote.publish_page(site, page_id)
+        if rotate_from:
+            remote.unpublish_page(rotate_from, cfg.trash_days)
+    if rotate_from:
+        record_unpublished(registry, rotate_from, None, status="rotated")
+    entry = fold.record(cfg, registry, fplan, page_id, ropts, content_hash)
+    remote.write_registry(registry)
+    fold.write_local_state(cfg, folder_rel, page_id, entry["url"], "live")
+    cleanup_jobs()
+
+    copied = _copy(entry["url"])
+    console.print(Panel.fit(
+        f"[bold green]{verb}[/bold green]  📁 {fplan.title}  ({len(fplan.pages)} notes)\n[link={entry['url']}]{entry['url']}[/link]"
+        + ("\n[dim]Copied to clipboard.[/dim]" if copied else "")
+        + ("\n[dim]Old link is dead.[/dim]" if rotate_from else ""),
+        border_style="green",
+    ))
+    if open_:
+        webbrowser.open(entry["url"])
+
+
+def _choose_folder_id(cfg: Config, folder_rel: str, registry: dict, *, restore: bool, force: bool, yes: bool,
+                      content_hash: str) -> tuple[str, str]:
+    if live := fold.find_live(registry, folder_rel):
+        page_id, entry = live
+        if entry.get("content_hash") == content_hash and not force:
+            console.print(f"[green]✓[/green] Nothing changed since the last publish ({_ago(entry.get('updated'))}). Skipping.  [dim](--force to push anyway)[/dim]")
+            console.print(f"  {entry['url']}")
+            raise typer.Exit(0)
+        console.print(Panel.fit(
+            f"📁 [bold]{entry.get('title')}[/bold] is already published ({len(entry.get('pages', {}))} notes)\n"
+            f"URL:        {entry['url']}\n"
+            f"Published:  {_ago(entry.get('published'))}\n"
+            f"Updated:    {_ago(entry.get('updated'))}",
+            border_style="yellow",
+        ))
+        if not yes and not Confirm.ask("Update it? Same link, new content", default=False):
+            raise typer.Exit(1)
+        return page_id, "Updated"
+
+    latest = fold.find_latest(registry, folder_rel)
+    local = fold.read_local_state(cfg).get(folder_rel)
+    if restore and (latest or local):
+        return (latest[0] if latest else local["id"]), "Restored"
+    if local and local.get("status") == "live" and not latest:
+        console.print("[blue]ℹ[/blue] The server doesn't know this folder (new server or lost registry?). Re-publishing with the same link.")
+        return local["id"], "Republished"
+    if latest:
+        console.print(f"[blue]ℹ[/blue] This folder was {latest[1].get('status')} {_ago(latest[1].get('unpublished'))}. "
+                      "It gets a [bold]new[/bold] link; the old one stays dead. (--restore to bring the old link back)")
+    page_id = new_id()
+    while page_id in registry["pages"]:
+        page_id = new_id()
+    return page_id, "Published"
+
+
 @app.command()
 def preview(
     note: NoteArg,
@@ -253,8 +377,17 @@ def preview(
     port: Annotated[int, typer.Option(help="Local port (0 = any free port).")] = 0,
     no_open: Annotated[bool, typer.Option("--no-open", help="Don't open the browser.")] = False,
 ):
-    """Render a note exactly as it would be published, and open it locally. Nothing is uploaded."""
-    cfg, path = _resolve_note(note)
+    """Render a note or folder exactly as it would be published, and open it locally. Nothing is uploaded."""
+    cfg, path = _resolve_target(note)
+    if path.is_dir():
+        index = VaultIndex(cfg.vault)
+        fplan = _plan_folder(cfg, path, index)
+        ropts = render_options(cfg, fplan.home.note, theme, mode)
+        site = fresh_site_dir("preview")
+        _render_folder(cfg, fplan, PREVIEW_ID, ropts, site, index)
+        cleanup_jobs()
+        serve(site, f"/{PREVIEW_ID}/{fplan.slug}", port=port, open_browser=not no_open)
+        return
     n = read_note(path, cfg.vault)
     index = VaultIndex(cfg.vault)
     report = validate(n, index)
@@ -277,21 +410,34 @@ def unpublish(
     yes: YesOpt = False,
 ):
     """Take a page down. Its link stops working for everyone."""
+    folder_rel = None
     if is_id(target) and not Path(target).exists():
         cfg = load_config(find_vault(Path.cwd()))
         page_id, note_path = target, None
+        remote = Remote.from_config(cfg)
+        registry = _registry(remote)
     else:
-        cfg, note_path = _resolve_note(target)
-        page_id = read_note(note_path, cfg.vault).page_id
-        if not page_id:
-            raise PostcardError("This note has never been published.")
+        cfg, path = _resolve_target(target)
+        remote = Remote.from_config(cfg)
+        registry = _registry(remote)
+        if path.is_dir():
+            folder_rel, note_path = path.relative_to(cfg.vault).as_posix(), None
+            live = fold.find_live(registry, folder_rel)
+            if not live:
+                raise PostcardError(f"📁 {path.name} isn't published.")
+            page_id = live[0]
+        else:
+            note_path = path
+            page_id = read_note(note_path, cfg.vault).page_id
+            if not page_id:
+                raise PostcardError("This note has never been published.")
 
-    remote = Remote.from_config(cfg)
-    registry = _registry(remote)
     entry = registry["pages"].get(page_id)
     if not entry or entry.get("status") != "live":
         raise PostcardError(f"Page {page_id} isn't live.")
-    if note_path is None and (cfg.vault / entry["source"]).exists():
+    if entry.get("kind") == "folder":
+        folder_rel, note_path = entry["source"], None
+    elif note_path is None and (cfg.vault / entry["source"]).exists():
         note_path = cfg.vault / entry["source"]
 
     console.print(f"[bold]{entry['title']}[/bold]\n{entry['url']}")
@@ -301,13 +447,24 @@ def unpublish(
         remote.unpublish_page(page_id, cfg.trash_days)
         record_unpublished(registry, page_id, note_path)
         remote.write_registry(registry)
+        if folder_rel:
+            fold.write_local_state(cfg, folder_rel, page_id, entry["url"], "unpublished")
     console.print(f"[green]✓[/green] Unpublished. Publishing again gives a new link (or use --restore within {cfg.trash_days} days).")
 
 
 @app.command()
 def rotate(note: NoteArg, yes: YesOpt = False):
-    """Give a live page a new link. The old link dies immediately."""
-    cfg, path = _resolve_note(note)
+    """Give a live page or folder a new link. The old link dies immediately."""
+    cfg, path = _resolve_target(note)
+    if path.is_dir():
+        folder_rel = path.relative_to(cfg.vault).as_posix()
+        live = fold.find_live(_registry(Remote.from_config(cfg)), folder_rel)
+        if not live:
+            raise PostcardError(f"📁 {path.name} isn't live, so there's no link to rotate.")
+        if not yes and not Confirm.ask(f"Kill {live[1]['url']} and make a new link?", default=False):
+            raise typer.Exit(1)
+        _publish_folder(cfg, path, theme=None, mode=None, yes=True, force=True, restore=False, open_=False, rotate_from=live[0])
+        return
     n = read_note(path, cfg.vault)
     remote = Remote.from_config(cfg)
     registry = _registry(remote)
@@ -351,7 +508,8 @@ def list_(all_: Annotated[bool, typer.Option("--all", "-a", help="Include unpubl
     if all_:
         t.add_column("STATUS")
     for pid, e in sorted(shown.items(), key=lambda kv: kv[1].get("updated", ""), reverse=True):
-        row = [pid, e.get("title", ""), _ago(e.get("updated")), e.get("theme", ""), e.get("url", "")]
+        title = f"📁 {e.get('title', '')} ({len(e.get('pages', {}))})" if e.get("kind") == "folder" else e.get("title", "")
+        row = [pid, title, _ago(e.get("updated")), e.get("theme", ""), e.get("url", "")]
         if all_:
             row.append(e.get("status", ""))
         t.add_row(*row)
@@ -360,8 +518,22 @@ def list_(all_: Annotated[bool, typer.Option("--all", "-a", help="Include unpubl
 
 @app.command()
 def status(note: NoteArg):
-    """Is this note live, and has it changed since it was published?"""
-    cfg, path = _resolve_note(note)
+    """Is this note or folder live, and has it changed since it was published?"""
+    cfg, path = _resolve_target(note)
+    if path.is_dir():
+        registry = _registry(Remote.from_config(cfg))
+        live = fold.find_live(registry, path.relative_to(cfg.vault).as_posix())
+        if not live:
+            console.print("Not published.")
+            return
+        _, entry = live
+        fplan = fold.plan(cfg, path)
+        changed = entry.get("content_hash") != fplan.content_hash(render_options(cfg, fplan.home.note))
+        console.print(f"📁 [bold]{entry['title']}[/bold] — live, {len(entry.get('pages', {}))} notes")
+        console.print(f"URL:       {entry['url']}")
+        console.print(f"Published: {_ago(entry.get('published'))}   Updated: {_ago(entry.get('updated'))}   Theme: {entry.get('theme')}")
+        console.print("[yellow]Changed since last publish.[/yellow]" if changed else "[green]Up to date.[/green]")
+        return
     n = read_note(path, cfg.vault)
     if not n.page_id:
         console.print("Not published.")
@@ -380,8 +552,14 @@ def status(note: NoteArg):
 
 @app.command("open")
 def open_cmd(note: NoteArg):
-    """Open a note's live page in the browser."""
-    cfg, path = _resolve_note(note)
+    """Open a note's or folder's live page in the browser."""
+    cfg, path = _resolve_target(note)
+    if path.is_dir():
+        live = fold.find_live(_registry(Remote.from_config(cfg)), path.relative_to(cfg.vault).as_posix())
+        if not live:
+            raise PostcardError(f"📁 {path.name} isn't published.")
+        webbrowser.open(live[1]["url"])
+        return
     n = read_note(path, cfg.vault)
     url = n.frontmatter.get("postcard_url")
     if not url or n.frontmatter.get("postcard_status") != "live":

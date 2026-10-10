@@ -24,6 +24,8 @@ class RenderRequest:
     theme_css: Path | None
     snippet_css: list[Path]
     mode: str
+    link_map: dict[str, str] | None = None  # vault path -> URL (notes published together as a folder)
+    skip_css: bool = False
 
 
 @dataclass
@@ -61,6 +63,8 @@ def render_with_obsidian(req: RenderRequest, timeout: float = 90) -> Rendered:
                 "theme_css": str(req.theme_css) if req.theme_css else None,
                 "snippet_css": [str(p) for p in req.snippet_css],
                 "mode": req.mode,
+                "link_map": req.link_map or {},
+                "skip_css": req.skip_css,
                 "settle_ms": 800,
                 "timeout_ms": 20000,
             }
@@ -72,11 +76,25 @@ def render_with_obsidian(req: RenderRequest, timeout: float = 90) -> Rendered:
 
     ack_wait = 20 if obsidian_was_running else 45  # cold start takes a while
     _wait_for(out / "ack.json", ack_wait, lambda: PostcardError(_no_ack_hint(req.vault, obsidian_was_running)))
+    if req.link_map or req.skip_css:
+        running = json.loads((out / "ack.json").read_text()).get("plugin") or "0.1.0"
+        if _version(running) < MIN_PLUGIN_FOR_FOLDERS:
+            raise PostcardError(
+                f"Obsidian is running Postcard Bridge {running}; folder publishing needs 0.2.0+.\n"
+                "  → run `postcard plugin install`, then in Obsidian: Cmd+P → “Reload app without saving”."
+            )
     _wait_for(out / "done.json", timeout, lambda: PostcardError(f"Obsidian took longer than {timeout:.0f}s to render the note."))
     done = json.loads((out / "done.json").read_text())
     if not done.get("ok"):
         raise PostcardError(f"Obsidian failed to render the note:\n{done.get('error')}")
     return Rendered(out)
+
+
+MIN_PLUGIN_FOR_FOLDERS = (0, 2, 0)
+
+
+def _version(v: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in v.split(".") if x.isdigit())
 
 
 def _no_ack_hint(vault: Path, was_running: bool) -> str:

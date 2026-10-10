@@ -19,6 +19,8 @@ interface RenderRequest {
 	theme_css: string | null; // absolute path to the theme.css to publish with, null = Obsidian default theme
 	snippet_css: string[]; // absolute paths of CSS snippets to include
 	mode: "dark" | "light";
+	link_map?: Record<string, string>; // vault path -> URL, for notes published as part of a folder
+	skip_css?: boolean; // folder publishes collect the CSS once, from the first note
 	settle_ms: number;
 	timeout_ms: number;
 }
@@ -63,7 +65,11 @@ export default class PostcardBridge extends Plugin {
 		if (!out.startsWith(CACHE_ROOT)) return;
 
 		fs.mkdirSync(path.join(out, "assets"), { recursive: true });
-		writeJson(path.join(out, "ack.json"), { ok: true, obsidian: (this.app as AppInternals).appVersion ?? null });
+		writeJson(path.join(out, "ack.json"), {
+			ok: true,
+			plugin: this.manifest.version,
+			obsidian: (this.app as AppInternals).appVersion ?? null,
+		});
 		try {
 			await new Renderer(this.app, req, out).run();
 			writeJson(path.join(out, "done.json"), { ok: true });
@@ -119,7 +125,7 @@ class Renderer {
 			this.freeze(sizer, file);
 			await this.collectMedia(sizer);
 			fs.writeFileSync(path.join(this.out, "content.html"), sizer.innerHTML);
-			fs.writeFileSync(path.join(this.out, "styles.css"), await this.collectCss());
+			if (!this.req.skip_css) fs.writeFileSync(path.join(this.out, "styles.css"), await this.collectCss());
 			writeJson(path.join(this.out, "meta.json"), {
 				body_class: bodyClass(this.req.mode),
 				body_style: document.body.getAttribute("style") ?? "",
@@ -187,6 +193,11 @@ class Renderer {
 		const dest = linkpath ? this.app.metadataCache.getFirstLinkpathDest(linkpath, file.path) : file;
 		if (dest && dest.path === file.path) {
 			a.href = anchor || "#";
+			return;
+		}
+		const mapped = dest ? this.req.link_map?.[dest.path] : undefined;
+		if (mapped) {
+			a.href = mapped + anchor;
 			return;
 		}
 		const fm = dest ? this.app.metadataCache.getFileCache(dest)?.frontmatter : undefined;

@@ -13,10 +13,14 @@ PAGE_RE = re.compile(r"^/([A-Za-z0-9]{12})(/[^/]*)?/?$")
 ASSET_RE = re.compile(r"^/(_s|[A-Za-z0-9]{12}/a)/[^/]+$")
 
 
-def route(path: str) -> str | None:
-    """Map a request path to a file path inside the site, or None for 404. Mirrors nginx.conf."""
+def route(path: str, site: Path | None = None) -> str | None:
+    """Map a request path to a file path inside the site, or None for 404. Mirrors nginx.conf:
+    try_files /$1$2/index.html /$1/index.html (a folder's sub-page, else the page/home itself)."""
     if m := PAGE_RE.match(path):
-        return f"/{m.group(1)}/index.html"
+        page_id, sub = m.group(1), (m.group(2) or "").rstrip("/")
+        if sub and site is not None and (site / page_id / sub.lstrip("/") / "index.html").is_file():
+            return f"/{page_id}{sub}/index.html"
+        return f"/{page_id}/index.html"
     if ASSET_RE.match(path):
         return path
     return None
@@ -24,7 +28,7 @@ def route(path: str) -> str | None:
 
 class _Handler(SimpleHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
-        target = route(urlsplit(self.path).path)
+        target = route(urlsplit(self.path).path, Path(self.directory))
         if target is None:
             self.send_error(404)
             return

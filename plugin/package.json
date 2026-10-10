@@ -1,7 +1,8 @@
 {
   "name": "postcard-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
+  "license": "MIT",
   "description": "Renders a note with Obsidian's own engine for the postcard CLI",
   "scripts": {
     "build": "tsc --noEmit && node esbuild.config.mjs",

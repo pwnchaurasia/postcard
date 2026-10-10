@@ -200,3 +200,16 @@ def test_server_home_upload(cfg, run):
     assert r.exit_code == 0, r.output
     home = server(cfg) / "site" / "_home.html"
     assert home.exists() and "Return to sender" in home.read_text()
+
+
+def test_inline_title_rules(cfg, fake_renderer):
+    site = fresh_site_dir("site")
+    note = read_note(cfg.vault / NOTE, cfg.vault)  # title: Vietnam Micro Blog, body starts with "# Day 1"
+    make_site(cfg, note, "AbCdEf123456", render_options(cfg, note), site)
+    assert '<div class="inline-title">Vietnam Micro Blog</div>' in (site / "AbCdEf123456" / "index.html").read_text()
+
+    plain = cfg.vault / "Travel" / "001-day-one.md"  # no frontmatter title: the note's own H1 is the title
+    plain.write_text("# Day 1\nLanded.\n")
+    note = read_note(plain, cfg.vault)
+    make_site(cfg, note, "AbCdEf123457", render_options(cfg, note), site)
+    assert "inline-title" not in (site / "AbCdEf123457" / "index.html").read_text()

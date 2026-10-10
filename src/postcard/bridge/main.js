@@ -72,7 +72,11 @@ var PostcardBridge = class extends import_obsidian.Plugin {
     const out = path.resolve(req.out);
     if (!out.startsWith(CACHE_ROOT)) return;
     fs.mkdirSync(path.join(out, "assets"), { recursive: true });
-    writeJson(path.join(out, "ack.json"), { ok: true, obsidian: this.app.appVersion ?? null });
+    writeJson(path.join(out, "ack.json"), {
+      ok: true,
+      plugin: this.manifest.version,
+      obsidian: this.app.appVersion ?? null
+    });
     try {
       await new Renderer(this.app, req, out).run();
       writeJson(path.join(out, "done.json"), { ok: true });
@@ -114,7 +118,7 @@ var Renderer = class {
       this.freeze(sizer, file);
       await this.collectMedia(sizer);
       fs.writeFileSync(path.join(this.out, "content.html"), sizer.innerHTML);
-      fs.writeFileSync(path.join(this.out, "styles.css"), await this.collectCss());
+      if (!this.req.skip_css) fs.writeFileSync(path.join(this.out, "styles.css"), await this.collectCss());
       writeJson(path.join(this.out, "meta.json"), {
         body_class: bodyClass(this.req.mode),
         body_style: document.body.getAttribute("style") ?? "",
@@ -173,6 +177,11 @@ var Renderer = class {
     const dest = linkpath ? this.app.metadataCache.getFirstLinkpathDest(linkpath, file.path) : file;
     if (dest && dest.path === file.path) {
       a.href = anchor || "#";
+      return;
+    }
+    const mapped = dest ? this.req.link_map?.[dest.path] : void 0;
+    if (mapped) {
+      a.href = mapped + anchor;
       return;
     }
     const fm = dest ? this.app.metadataCache.getFileCache(dest)?.frontmatter : void 0;
