@@ -9,6 +9,11 @@ from postcard import core
 from postcard.config import Config, write_config
 from postcard.render import ASSET_TOKEN, Rendered, RenderRequest
 
+# Fake secrets for testing the secret checks, assembled at runtime so secret scanners don't flag the repo:
+# AWS's documented example access key, and a bare private-key header with no key under it.
+FAKE_AWS_KEY = "AKIA" + "IOSFODNN7EXAMPLE"
+FAKE_PRIVATE_KEY_HEADER = "-----BEGIN OPENSSH " + "PRIVATE KEY-----"
+
 
 def jpeg_with_gps() -> bytes:
     img = Image.new("RGB", (2400, 1200), (40, 120, 200))

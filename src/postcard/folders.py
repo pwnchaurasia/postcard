@@ -22,7 +22,7 @@ from .build import BuildResult, NavContext, PageOptions, build_css, build_page
 from .config import Config, PostcardError
 from .core import RenderOptions, Renderer
 from .render import RenderRequest, Rendered
-from .validate import Report, validate
+from .validate import Report, _prose, validate
 from .vault import Note, VaultIndex, now_iso, read_note, slugify
 
 HOME_NAMES = re.compile(r"^(index|readme|home|start here)$|overview", re.I)
@@ -126,6 +126,10 @@ def plan(cfg: Config, folder: Path, index: VaultIndex | None = None) -> FolderPl
 
 # --- rendering (with a cache, so republishing only re-renders notes that changed) -------------
 
+# $inline$ or $$display$$ math. MathJax adds the CSS for each glyph only when it draws it.
+MATH_RE = re.compile(r"\$\$|(?<![\\\w$])\$[^\s$][^$\n]*?(?<!\s)\$(?!\w)")
+
+
 def render_all(cfg: Config, fplan: FolderPlan, page_id: str, ropts: RenderOptions, renderer: Renderer,
                progress=lambda done, total, rel: None) -> tuple[dict[str, Rendered], Rendered]:
     """Returns (rendered by page rel, a render that carries the CSS)."""
@@ -136,29 +140,33 @@ def render_all(cfg: Config, fplan: FolderPlan, page_id: str, ropts: RenderOption
     link_map = fplan.link_map(page_id)
     links_key = json.dumps(link_map, sort_keys=True)
     out: dict[str, Rendered] = {}
-    css_render: Rendered | None = None
+    total = len(fplan.pages) + 1
+
+    def request(page: FolderPage, skip_css: bool) -> RenderRequest:
+        return RenderRequest(cfg.vault, page.note.rel, ropts.theme_css, ropts.snippets, ropts.mode,
+                             link_map=link_map, skip_css=skip_css)
 
     for i, page in enumerate(fplan.pages):
-        progress(i, len(fplan.pages), page.rel)
+        progress(i, total, page.rel)
         key = hashlib.sha256(
             "\0".join([page.note.text, links_key, *ropts.fingerprint(), page.note.rel]).encode()
         ).hexdigest()[:24]
         cached = cache / key
-        need_css = css_render is None
-        if cached.is_dir() and not need_css:
+        # Notes with math are always re-rendered, so MathJax's glyph styles exist when the CSS is collected below.
+        if cached.is_dir() and not MATH_RE.search(_prose(page.note.body)):
             os.utime(cached)  # keep recently used entries out of _prune
             out[page.rel] = Rendered(cached)
             continue
-        rendered = renderer(RenderRequest(cfg.vault, page.note.rel, ropts.theme_css, ropts.snippets, ropts.mode,
-                                          link_map=link_map, skip_css=not need_css))
-        if need_css:
-            css_render = rendered
+        rendered = renderer(request(page, skip_css=True))
         shutil.rmtree(cached, ignore_errors=True)
         shutil.copytree(rendered.dir, cached)
         out[page.rel] = Rendered(cached)
-    progress(len(fplan.pages), len(fplan.pages), "")
+
+    # Collect the CSS last: by now it includes every style Obsidian added while rendering the notes above.
+    progress(len(fplan.pages), total, "styles")
+    css_render = renderer(request(fplan.home, skip_css=False))
+    progress(total, total, "")
     _prune(cache)
-    assert css_render is not None
     return out, css_render
 
 
@@ -263,7 +271,11 @@ def find_live(registry: dict, folder_rel: str) -> tuple[str, dict] | None:
 
 def find_latest(registry: dict, folder_rel: str) -> tuple[str, dict] | None:
     matches = [(pid, e) for pid, e in registry["pages"].items() if e.get("kind") == "folder" and e.get("source") == folder_rel]
-    return max(matches, key=lambda kv: kv[1].get("updated", "")) if matches else None
+    if not matches:
+        return None
+    # Timestamps have 1-second resolution; on a tie the entry added to the registry later is the newer one.
+    _, latest = max(enumerate(matches), key=lambda im: (im[1][1].get("updated", ""), im[0]))
+    return latest
 
 
 def record(cfg: Config, registry: dict, fplan: FolderPlan, page_id: str, ropts: RenderOptions, content_hash: str) -> dict:

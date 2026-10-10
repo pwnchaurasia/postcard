@@ -14,7 +14,7 @@ from postcard.preview import route
 from postcard.remote import Remote
 from postcard.vault import read_note, split_frontmatter
 
-from .conftest import jpeg_with_gps
+from .conftest import FAKE_AWS_KEY, jpeg_with_gps
 
 NOTE = "Travel/Vietnam Micro Blog.md"
 
@@ -176,7 +176,7 @@ def test_copied_note_gets_its_own_link(cfg, run):
 
 
 def test_errors_block_publish(cfg, run):
-    (cfg.vault / "Secret.md").write_text("aws AKIAIOSFODNN7EXAMPLE")
+    (cfg.vault / "Secret.md").write_text(f"aws {FAKE_AWS_KEY}")
     r = run("publish", "Secret.md", "--yes")
     assert r.exit_code == 1 and "AWS access key" in r.output
     assert not server(cfg).exists()

@@ -8,6 +8,8 @@ from postcard import cli
 from postcard.folders import plan, scan
 from postcard.preview import route
 
+from .conftest import FAKE_AWS_KEY
+
 FOLDER = "02 - Study/Deployment"
 
 
@@ -19,7 +21,7 @@ def deployment(cfg) -> Path:
     (d / "001-Account.md").write_text("# Account\n")
     (d / "002-Network.md").write_text("# Network\nBack to [[000-Overview-and-Architecture]].\n")
     (d / "010-Later.md").write_text("# Later\n")
-    (d / "Example" / "AZURE data.md").write_text("key AKIAIOSFODNN7EXAMPLE\n")
+    (d / "Example" / "AZURE data.md").write_text(f"key {FAKE_AWS_KEY}\n")
     (d / "Example" / "Sub note.md").write_text("# Sub\n")
     (d / "a.md").write_text("# Named like the assets folder\n")
     return d
@@ -73,7 +75,8 @@ def test_publish_folder_lifecycle(cfg, deployment, run, fake_renderer):
     link_map = fake_renderer[0].link_map
     assert link_map[f"{FOLDER}/002-Network.md"] == f"/{pid}/002-network"
     assert f"{FOLDER}/Example/AZURE data.md" not in link_map
-    assert not fake_renderer[0].skip_css and all(req.skip_css for req in fake_renderer[1:])
+    # the CSS is collected last, after every note has been rendered
+    assert not fake_renderer[-1].skip_css and all(req.skip_css for req in fake_renderer[:-1])
 
     # sidebar + pager
     page = (root / "001-account" / "index.html").read_text()
@@ -91,7 +94,7 @@ def test_publish_folder_lifecycle(cfg, deployment, run, fake_renderer):
     r = run("publish", FOLDER, "--yes")
     assert "Nothing changed" in r.output and len(fake_renderer) == renders
 
-    # change one note: only the CSS carrier (first note) and the changed note are rendered again
+    # change one note: only the changed note and the CSS pass are rendered again
     (deployment / "010-Later.md").write_text("# Later\nNew stuff.\n")
     r = run("publish", FOLDER, "--yes")
     assert "Updated" in r.output, r.output
@@ -142,3 +145,23 @@ def test_preview_routes_folder_subpages(tmp_path):
 def test_folder_name_lookup(cfg, deployment, run):
     r = run("publish", "Deployment", "--yes")
     assert r.exit_code == 0 and "📁 Deployment" in r.output
+
+
+def test_notes_with_math_skip_the_render_cache(cfg, deployment, run, fake_renderer):
+    (deployment / "001-Account.md").write_text("# Account\nCost is $E = mc^2$.\n")
+    run("publish", FOLDER, "--yes")
+    before = len(fake_renderer)
+    run("publish", FOLDER, "--yes", "--force")
+    rendered_again = [r.note_rel for r in fake_renderer[before:]]
+    assert f"{FOLDER}/001-Account.md" in rendered_again          # math: always fresh
+    assert f"{FOLDER}/002-Network.md" not in rendered_again[:-1]  # no math: from cache (last one is the CSS pass)
+
+
+def test_find_latest_breaks_timestamp_ties_by_registry_order():
+    from postcard.folders import find_latest
+    same = "2026-10-10T12:00:00"
+    reg = {"pages": {
+        "OldOldOld123": {"kind": "folder", "source": "F", "updated": same},
+        "NewNewNew123": {"kind": "folder", "source": "F", "updated": same},
+    }}
+    assert find_latest(reg, "F")[0] == "NewNewNew123"

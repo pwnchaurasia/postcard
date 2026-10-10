@@ -3,6 +3,8 @@ from pathlib import Path
 from postcard.validate import validate
 from postcard.vault import VaultIndex, read_note, set_postcard_fields, slugify, split_frontmatter
 
+from .conftest import FAKE_AWS_KEY, FAKE_PRIVATE_KEY_HEADER
+
 
 def test_set_fields_preserves_everything_else(tmp_path: Path):
     p = tmp_path / "n.md"
@@ -46,8 +48,8 @@ def _note(vault: Path, body: str, fm: str = ""):
 
 
 def test_blocks_secrets_and_private(vault: Path):
-    assert any("AWS" in e for e in validate(_note(vault, "key AKIAIOSFODNN7EXAMPLE")).errors)
-    assert any("private key" in e for e in validate(_note(vault, "-----BEGIN OPENSSH PRIVATE KEY-----")).errors)
+    assert any("AWS" in e for e in validate(_note(vault, f"key {FAKE_AWS_KEY}")).errors)
+    assert any("private key" in e for e in validate(_note(vault, FAKE_PRIVATE_KEY_HEADER)).errors)
     assert any("#private" in e for e in validate(_note(vault, "secret plans #private")).errors)
     assert any("private" in e for e in validate(_note(vault, "x", "tags: [private]\n")).errors)
     assert any("private" in e for e in validate(_note(vault, "x", "postcard: false\n")).errors)
