@@ -1,0 +1,34 @@
+# secrets & local config — never commit
+.env
+.env.*
+config.toml
+!config.example.toml
+.postcard/
+*.pem
+*.key
+id_*
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# plugin
+plugin/node_modules/
+plugin/*.js
+!plugin/esbuild.config.mjs
+# the built bridge (src/postcard/bridge/main.js) IS committed so `uv tool install` works without node
+
+# captured Obsidian CSS / render output (contains Obsidian's app.css)
+.cache/
+*.build/
+
+# os / editors
+.DS_Store
+.idea/
+.vscode/

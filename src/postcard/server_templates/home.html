@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="referrer" content="no-referrer">
+<title>Postcard</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📮</text></svg>">
+<!--
+  Served at "/" and as the 404 page (nginx: error_page 404 /_home.html).
+  On "/" it's the mailbox; anywhere else it's "Return to sender".
+  Self-contained on purpose: no fonts, scripts or images from anywhere else.
+-->
+<style>
+  :root {
+    --bg: #161b22;            /* Dark Moss background */
+    --bg-glow: #1d2633;
+    --paper: #f4eddd;
+    --paper-edge: #e3d8c0;
+    --ink: #2a2622;
+    --ink-soft: #6d6457;
+    --blue: #289aff;          /* Dark Moss h1 */
+    --green: #00c957;
+    --stamp-red: #c8372d;
+    --hint: #8b949e;
+    --hand: "Bradley Hand", "Segoe Print", "Comic Neue", "Chalkboard SE", cursive;
+    --mono: "Hack", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #e9edf2; --bg-glow: #f6f8fb; --hint: #57606a; }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: radial-gradient(ellipse at 50% 40%, var(--bg-glow), var(--bg) 70%) fixed, var(--bg);
+    display: grid;
+    place-items: center;
+    min-height: 100dvh;
+    padding: 16px;
+    overflow: hidden;
+    font-family: var(--mono);
+    -webkit-tap-highlight-color: transparent;
+  }
+  #sky { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+
+  .stage { position: relative; z-index: 1; display: grid; justify-items: center; gap: 14px; width: min(580px, 100%); }
+
+  /* ---- the postcard ---------------------------------------------------- */
+  .card {
+    width: 100%;
+    aspect-ratio: 3 / 2;
+    perspective: 1400px;
+    cursor: pointer;
+    animation: drop-in 0.9s cubic-bezier(.2, .9, .3, 1.2) both;
+  }
+  .card:focus-visible { outline: 2px dashed var(--blue); outline-offset: 8px; border-radius: 6px; }
+  .card-inner {
+    position: relative; width: 100%; height: 100%;
+    transform-style: preserve-3d;
+    transition: transform 0.8s cubic-bezier(.3, 1.3, .5, 1);
+    transform: rotate(-2deg);
+  }
+  .card:hover .card-inner { transform: rotate(-1deg) translateY(-4px); }
+  .card.flipped .card-inner { transform: rotateY(180deg) rotate(2deg); }
+  .face {
+    position: absolute; inset: 0;
+    backface-visibility: hidden; -webkit-backface-visibility: hidden;
+    background:
+      repeating-linear-gradient(0deg, transparent 0 3px, rgba(120, 100, 60, .025) 3px 4px),
+      var(--paper);
+    border-radius: 6px;
+    box-shadow: 0 1px 0 var(--paper-edge) inset, 0 18px 40px rgba(0, 0, 0, .45), 0 4px 10px rgba(0, 0, 0, .3);
+    color: var(--ink);
+    padding: clamp(16px, 4.5%, 28px);
+    overflow: hidden;
+  }
+  .face::before {  /* airmail border */
+    content: ""; position: absolute; inset: 0; border-radius: 6px; pointer-events: none;
+    border: 6px solid transparent;
+    border-image: repeating-linear-gradient(45deg, var(--stamp-red) 0 10px, transparent 10px 20px, var(--blue) 20px 30px, transparent 30px 40px) 6;
+    opacity: .85;
+  }
+  .back { transform: rotateY(180deg); display: grid; place-items: center; text-align: center; }
+
+  .front { display: grid; grid-template-columns: 1.15fr auto 1fr; gap: clamp(10px, 3%, 20px); }
+  .divider { width: 1px; background: var(--ink-soft); opacity: .35; margin: 8% 0; }
+
+  .message { font-family: var(--hand); font-size: clamp(15px, 3.1vw, 19px); line-height: 1.35; align-self: center; }
+  .message h1 { font-size: 1.45em; margin: 0 0 .35em; font-weight: 700; color: var(--ink); }
+  .message p { margin: 0 0 .5em; }
+  .message .sig { margin-top: .6em; color: var(--ink-soft); }
+
+  .address { display: grid; grid-template-rows: auto 1fr; position: relative; }
+  .stamp {
+    justify-self: end;
+    width: clamp(54px, 15vw, 76px); aspect-ratio: 4 / 5;
+    background: var(--blue);
+    border-radius: 3px;
+    display: grid; place-items: center; align-content: center; gap: 2px;
+    color: #fff; font-size: clamp(9px, 1.8vw, 11px); letter-spacing: .08em;
+    /* perforated edge */
+    outline: 3px dotted var(--paper);
+    outline-offset: -2px;
+    box-shadow: 0 0 0 2px var(--paper), 0 1px 3px rgba(0, 0, 0, .25);
+    padding: 6px;
+    transform: rotate(3deg);
+  }
+  .stamp .glyph { font-size: 2.3em; line-height: 1; }
+  .postmark {
+    position: absolute; right: clamp(34px, 9vw, 52px); top: clamp(26px, 7vw, 40px);
+    width: clamp(62px, 16vw, 84px); aspect-ratio: 1; border-radius: 50%;
+    border: 2px solid rgba(42, 38, 34, .55);
+    display: grid; place-items: center; text-align: center;
+    font-size: clamp(7px, 1.5vw, 9px); line-height: 1.25; letter-spacing: .06em; color: rgba(42, 38, 34, .65);
+    transform: rotate(-14deg);
+    mix-blend-mode: multiply;
+  }
+  .postmark::after {  /* wavy cancellation lines */
+    content: ""; position: absolute; left: 88%; top: 30%; width: 120%; height: 40%;
+    background: repeating-linear-gradient(180deg, transparent 0 5px, rgba(42, 38, 34, .45) 5px 6.5px);
+    -webkit-mask: radial-gradient(14px 6px at 50% 50%, #000 60%, transparent 62%) 0 0 / 22px 100%;
+    border-radius: 40%;
+  }
+  .lines { align-self: end; display: grid; gap: clamp(10px, 3vw, 16px); padding-bottom: 6%; }
+  .lines div { border-bottom: 1px solid rgba(42, 38, 34, .4); font-size: clamp(10px, 2.2vw, 13px); padding-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .rubber {  /* "RETURN TO SENDER" */
+    position: absolute; left: 73%; top: 44%;   /* the empty space on the address side */
+    padding: .3em .6em; border: 4px double var(--stamp-red); border-radius: 6px;
+    color: var(--stamp-red); font: 800 clamp(15px, 3.6vw, 22px)/1 var(--mono); letter-spacing: .08em; white-space: nowrap;
+    opacity: .85; mix-blend-mode: multiply; pointer-events: none;
+    transform: translate(-50%, -50%) rotate(-14deg);
+    animation: slam .45s 1s cubic-bezier(.5, 0, .6, 1.4) both;
+  }
+
+  .back-text { font-family: var(--hand); font-size: clamp(16px, 3.6vw, 22px); line-height: 1.4; max-width: 30ch; }
+  .back-text .big { font-size: 2.2em; display: block; margin-bottom: .2em; }
+  .back-text a { color: var(--blue); }
+
+  .hint { color: var(--hint); font-size: 12px; letter-spacing: .04em; text-align: center; user-select: none; max-width: 90vw; text-wrap: balance; }
+  .hint kbd { font: inherit; border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; }
+
+  /* Phones: portrait postcard, address block under the message */
+  @media (max-width: 520px) {
+    .card { aspect-ratio: 4 / 5; max-width: 400px; }
+    .front { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; gap: 8px; }
+    .divider { display: none; }
+    .address { grid-row: 1; grid-template-rows: auto; min-height: 92px; }
+    .message { grid-row: 2; }
+    .lines { grid-row: 3; padding-bottom: 0; }
+    .postmark { right: 70px; top: 18px; }
+    .rubber { left: 50%; top: 86%; }   /* below the signature */
+  }
+
+  @keyframes drop-in {
+    from { opacity: 0; transform: translateY(-40px) rotate(-8deg) scale(.96); }
+    to   { opacity: 1; transform: none; }
+  }
+  @keyframes slam {
+    0%   { opacity: 0; transform: translate(-50%, -50%) rotate(-14deg) scale(2.6); }
+    70%  { opacity: .9; transform: translate(-50%, -50%) rotate(-14deg) scale(.94); }
+    100% { opacity: .85; transform: translate(-50%, -50%) rotate(-14deg) scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .card, .rubber { animation: none; }
+    .card-inner { transition: none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="sky" aria-hidden="true"></canvas>
+
+<main class="stage">
+  <div class="card" id="card" role="button" tabindex="0" aria-label="Postcard. Press to flip it over.">
+    <div class="card-inner">
+      <section class="face front">
+        <div class="message" id="message">
+          <h1>Hi there 👋</h1>
+          <p>This is a personal postcard box.</p>
+          <p>Nothing here is public. If I want to show you something, I'll send you the link.</p>
+          <p class="sig">— the sender</p>
+        </div>
+        <div class="divider"></div>
+        <div class="address">
+          <div class="stamp" aria-hidden="true"><span class="glyph">✉</span><span>POSTCARD</span></div>
+          <div class="postmark" aria-hidden="true" id="postmark"></div>
+          <div class="lines" id="lines">
+            <div>To: you, curious traveller</div>
+            <div>Somewhere on the internet</div>
+            <div id="host">&nbsp;</div>
+          </div>
+        </div>
+      </section>
+      <section class="face back">
+        <div class="back-text" id="back">
+          <span class="big">🍪</span>
+          P.S. Snooping in someone's mailbox is rude…<br>but you found it, so here's a cookie.
+        </div>
+      </section>
+    </div>
+  </div>
+  <div class="hint" id="hint">tap the card to flip it · tap anywhere to send a postcard</div>
+</main>
+
+<script>
+(() => {
+  const params = new URLSearchParams(location.search);
+  const lost = (params.get("as") || (location.pathname === "/" ? "home" : "lost")) === "lost";
+  const host = location.hostname || "postcard";
+  const parent = /[a-z]/i.test(host) && host.split(".").length > 2 ? host.split(".").slice(1).join(".") : "";
+  const today = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).toUpperCase();
+
+  document.getElementById("host").textContent = host;
+  document.getElementById("postmark").innerHTML = `${host.split(".")[0].toUpperCase()}<br>${today}`;
+
+  if (lost) {
+    document.title = "Return to sender · Postcard";
+    document.getElementById("message").innerHTML = `
+      <h1>Hmm. 📭</h1>
+      <p>This postcard doesn't exist, or the sender took it back.</p>
+      <p>If someone sent you this link, ask them for a fresh one.</p>
+      <p class="sig">— the mail carrier</p>`;
+    document.querySelector(".front").insertAdjacentHTML("beforeend", '<div class="rubber" aria-hidden="true">RETURN TO SENDER</div>');
+    document.getElementById("back").innerHTML = `
+      <span class="big">🔦</span>
+      We looked everywhere.<br>Under the couch. Behind the fridge.<br>Nothing.`;
+  } else if (parent) {
+    document.getElementById("back").innerHTML += `<br><br><small>Looking for the public stuff?<br><a href="https://${parent}/">${parent} →</a></small>`;
+  }
+
+  // ---- flip ---------------------------------------------------------------
+  const card = document.getElementById("card");
+  const flip = () => card.classList.toggle("flipped");
+  card.addEventListener("click", (e) => { if (!e.target.closest("a")) flip(); });
+  card.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); } });
+
+  // ---- the sky full of postcards -------------------------------------------
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const cv = document.getElementById("sky");
+  const ctx = cv.getContext("2d");
+  const colors = ["#289aff", "#00c957", "#c8372d", "#e0a526", "#a371f7"];
+  let W = 0, H = 0, flock = [], launched = [], last = performance.now();
+
+  const rand = (a, b) => a + Math.random() * (b - a);
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = innerWidth; H = innerHeight;
+    cv.width = W * dpr; cv.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const want = Math.max(6, Math.min(18, Math.round((W * H) / 70000)));
+    while (flock.length < want) flock.push(make(rand(-W * 0.2, W)));
+    flock.length = want;
+  }
+
+  function make(x) {
+    const depth = rand(0.35, 1);           // far = small, dim, slow
+    return {
+      x: x ?? rand(-260, -60), baseY: rand(0.05, 0.95) * H,
+      speed: (18 + 42 * depth) * (lost ? 0.6 : 1),
+      amp: rand(8, 36), freq: rand(0.3, 0.9), phase: rand(0, Math.PI * 2),
+      spin: rand(-0.25, 0.25), depth, color: colors[(Math.random() * colors.length) | 0],
+    };
+  }
+
+  function drawCard(x, y, rot, scale, color, alpha) {
+    const w = 46 * scale, h = 31 * scale;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(x, y);
+    ctx.rotate(rot);
+    ctx.fillStyle = "rgba(0,0,0,.25)";
+    ctx.fillRect(-w / 2 + 2, -h / 2 + 3, w, h);                    // shadow
+    ctx.fillStyle = "#f4eddd";
+    ctx.fillRect(-w / 2, -h / 2, w, h);                            // paper
+    ctx.fillStyle = color;
+    ctx.fillRect(w / 2 - 12 * scale, -h / 2 + 4 * scale, 8 * scale, 10 * scale);   // stamp
+    ctx.strokeStyle = "rgba(42,38,34,.45)";
+    ctx.lineWidth = Math.max(0.6, scale * 0.8);
+    ctx.beginPath();
+    ctx.moveTo(0, -h / 2 + 5 * scale); ctx.lineTo(0, h / 2 - 5 * scale);             // divider
+    for (let i = 0; i < 3; i++) {                                                     // scribbles
+      const ly = -h / 2 + (10 + i * 6) * scale;
+      ctx.moveTo(-w / 2 + 5 * scale, ly); ctx.lineTo(-4 * scale - (i === 2 ? 8 * scale : 0), ly);
+      ctx.moveTo(4 * scale, ly + 4 * scale); ctx.lineTo(w / 2 - 5 * scale, ly + 4 * scale);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    const t = now / 1000;
+    ctx.clearRect(0, 0, W, H);
+
+    flock.sort((a, b) => a.depth - b.depth);                       // far ones first
+    for (const p of flock) {
+      p.x += p.speed * dt;
+      if (p.x > W + 80) Object.assign(p, make());
+      const y = p.baseY + Math.sin(t * p.freq + p.phase) * p.amp;
+      const rot = Math.sin(t * p.freq * 1.3 + p.phase) * 0.22 + p.spin;
+      drawCard(p.x, y, rot, 0.55 + p.depth * 0.75, p.color, 0.18 + p.depth * 0.5);
+    }
+
+    launched = launched.filter((p) => p.life > 0);
+    for (const p of launched) {                                    // cards you send: zoom off and fade
+      p.vx *= 1 + dt * 0.9; p.vy -= 160 * dt;
+      p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt; p.life -= dt * 0.55;
+      drawCard(p.x, p.y, p.rot, 1.3, p.color, Math.max(0, Math.min(1, p.life)));
+    }
+    if (!reduce) requestAnimationFrame(frame);
+  }
+
+  addEventListener("resize", resize);
+  addEventListener("pointerdown", (e) => {
+    if (reduce || e.target.closest(".card")) return;
+    for (let i = 0; i < (lost ? 1 : 3); i++) {
+      launched.push({
+        x: e.clientX, y: e.clientY,
+        vx: rand(60, 220) * (e.clientX > W / 2 ? 1 : -1), vy: rand(-140, -40),
+        rot: rand(-0.4, 0.4), vr: rand(-3, 3), life: 1.6,
+        color: colors[(Math.random() * colors.length) | 0],
+      });
+    }
+    if (launched.length > 60) launched.splice(0, launched.length - 60);
+  });
+  if (reduce) document.getElementById("hint").textContent = "tap the card to flip it";
+
+  resize();
+  requestAnimationFrame(frame);   // with reduced motion this draws one still frame
+})();
+</script>
+</body>
+</html>

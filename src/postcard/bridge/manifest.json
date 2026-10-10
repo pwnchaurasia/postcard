@@ -1,0 +1,9 @@
+{
+  "id": "postcard-bridge",
+  "name": "Postcard Bridge",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Renders notes with Obsidian's own engine for the postcard CLI. Does nothing on its own.",
+  "author": "pwnchaurasia",
+  "isDesktopOnly": true
+}

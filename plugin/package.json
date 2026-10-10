@@ -1,0 +1,16 @@
+{
+  "name": "postcard-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Renders a note with Obsidian's own engine for the postcard CLI",
+  "scripts": {
+    "build": "tsc --noEmit && node esbuild.config.mjs",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
+    "obsidian": "1.14.4",
+    "typescript": "^5.6.0"
+  }
+}

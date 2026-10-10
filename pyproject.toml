@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "postcard"
+version = "0.1.0"
+description = "Share single Obsidian notes as unlisted pages on your own server, rendered exactly like your vault."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.7",
+    "pyyaml>=6.0",
+    "pillow>=10.3",
+]
+
+[project.scripts]
+postcard = "postcard.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/postcard"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
